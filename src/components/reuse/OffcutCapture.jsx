@@ -1,0 +1,26 @@
+import React,{useMemo,useState} from 'react';
+import {useProject} from '@/lib/ProjectContext';
+import {useReuse} from '@/lib/ReuseContext';
+import {detectOffcuts} from '@/lib/offcutGeometry';
+export function ScrapPreview({width,height}) {return <svg viewBox={`0 0 ${width} ${height}`} aria-label={`${width} by ${height} millimeter rectangular offcut`} role="img" className="w-24 h-16"><rect width={width} height={height} fill="#DCFCE7" stroke="#15803D" strokeWidth={Math.max(width,height)/100}/></svg>;}
+export default function OffcutCapture(){
+  const {layout,material,projectId,projectName,pieces,saveProject}=useProject();const {inventory,transact}=useReuse();
+  const [unusable,setUnusable]=useState([]);
+  const [error,setError]=useState('');const [busy,setBusy]=useState(false);const [edits,setEdits]=useState({});const [excluded,setExcluded]=useState([]);
+  const detected=useMemo(()=>detectOffcuts(layout,material,projectId),[layout,material,projectId]);
+  if(!layout?.valid || layout.status!=='complete')return null;
+  const production=inventory.productions.find(p=>p.projectId===projectId);
+  const candidates=production?.candidates ?? detected.candidates;
+  const ids=layout.sheets.filter(s=>s.offcutId).map(s=>s.offcutId);
+  const act=async action=>{setBusy(true);setError('');try{await transact(action);saveProject();}catch(e){setError(e.message);}finally{setBusy(false);}};
+  const save=all=>act({type:'capture',projectId,records:candidates.filter(c=>!unusable.includes(c.id) && (all || !excluded.includes(c.id))).map(c=>({...c,...edits[c.id],notes:edits[c.id]?.notes ?? ''}))});
+  return <section className="bg-white border border-[#E2E8E4] rounded-2xl p-5 space-y-3"><h3 className="font-bold text-[#123D26]">Production & reusable offcuts</h3>
+    <p className="text-sm text-slate-600">Geometric leftover: {((layout.stats.leftoverAreaMm2 ?? 0)/100).toFixed(1)} cm². Estimated reusable: {(detected.estimatedArea/100).toFixed(1)} cm². Kerf loss: {layout.stats.kerfLossMm2===null?'Not verified':`${(layout.stats.kerfLossMm2/100).toFixed(1)} cm²`}. Remaining margins, small fragments and conservative exclusions: {(detected.excludedArea/100).toFixed(1)} cm² (includes kerf; not additional area).</p>
+    <p className="text-xs text-slate-500">{detected.method}. Candidate threshold: 50 mm minimum side and 100 cm² minimum area. Confirm physical recovery before inventory becomes available.</p>
+    {!production && <div className="flex gap-3 flex-wrap"><button disabled={busy} className="border rounded px-3 py-2" onClick={()=>act({type:'reserve',projectId,ids})}>Reserve layout offcuts</button><button disabled={busy} className="border rounded px-3 py-2" onClick={()=>act({type:'release',projectId})}>Cancel reservation</button><button disabled={busy} className="bg-[#123D26] text-white rounded px-3 py-2" onClick={()=>act({type:'produce',projectId,ids,production:{projectName,material:{...material},pieces,candidates:detected.candidates,confirmedAt:new Date().toISOString(),purchasedSheets:layout.stats.purchasedSheets,avoidedPurchases:layout.avoidedPurchases}})}>Confirm production / consumption</button></div>}
+    {production && !production.captureDone && <><p className="text-sm">Your project has leftover material! ScrapSmart found potentially reusable offcuts. Would you like to save them to your Reuse Hub?</p>
+      <div className="grid sm:grid-cols-2 gap-3">{candidates.map(c=><div key={c.id} className="border rounded-xl p-3"><label className="flex gap-2"><input type="checkbox" disabled={unusable.includes(c.id)} checked={!unusable.includes(c.id) && !excluded.includes(c.id)} onChange={e=>setExcluded(prev=>e.target.checked?prev.filter(id=>id!==c.id):[...prev,c.id])}/>Recover this offcut</label><ScrapPreview width={c.width} height={c.height}/><div className="flex gap-2">{['width','height'].map(k=><label key={k} className="text-xs">{k} (mm)<input className="border rounded w-24 block p-1" type="number" min="0.1" max={c[k]} value={edits[c.id]?.[k] ?? c[k]} onChange={e=>setEdits(prev=>({...prev,[c.id]:{...prev[c.id],[k]:Number(e.target.value)}}))}/></label>)}</div><input aria-label="Offcut notes" placeholder="Notes" className="border rounded mt-2 w-full p-1" onChange={e=>setEdits(prev=>({...prev,[c.id]:{...prev[c.id],notes:e.target.value}}))}/><button className="text-xs text-red-700" onClick={()=>setUnusable(prev=>prev.includes(c.id)?prev.filter(id=>id!==c.id):[...prev,c.id])}>{unusable.includes(c.id)?'Restore usable':'Mark unusable'}</button></div>)}</div>
+      <p className="text-xs">Saving confirms that you measured and physically recovered these regions. Corrections can reduce candidate dimensions.</p><div className="flex gap-3"><button disabled={busy} onClick={()=>save(true)} className="bg-green-700 text-white rounded p-2">Save all</button><button disabled={busy} onClick={()=>save(false)} className="border rounded p-2">Save selected</button><button disabled={busy} onClick={()=>act({type:'capture',projectId,records:[]})}>Skip saving</button></div></>}
+    {production?.captureDone && <p className="text-green-700 text-sm">Production confirmed. Offcut recovery recorded once for this physical run.</p>}{error && <p role="alert" className="text-red-700">{error}</p>}
+  </section>;
+}
